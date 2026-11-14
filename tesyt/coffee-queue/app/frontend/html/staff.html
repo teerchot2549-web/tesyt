@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#123D2F">
+  <meta name="robots" content="noindex">
+  <title>Coffee Queue · Staff</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=Mitr:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="bar">
+      <span class="brand">Coffee Queue · Staff</span>
+      <nav><a href="index.html">Order drinks</a><a href="#" id="logout" class="hidden">Log out</a></nav>
+    </div>
+    <div class="intro">
+      <h1>Orders</h1>
+      <p>Check slips, confirm payments, then move each order on.</p>
+    </div>
+  </header>
+
+  <main>
+    <form id="login" class="card" autocomplete="off">
+      <label class="field-title" for="pin">Staff PIN</label>
+      <input type="password" id="pin" inputmode="numeric" placeholder="Enter PIN" required>
+      <div id="loginMsg" class="msg hidden" style="margin:14px 0 0"></div>
+      <button class="btn cherry" type="submit" style="margin-top:16px">Show orders</button>
+    </form>
+
+    <section id="board" class="hidden">
+      <div class="toolbar">
+        <span class="updated" id="updated"></span>
+        <span class="tools">
+          <button type="button" class="chipbtn" id="soundBtn" aria-pressed="false">🔇 Sound off</button>
+          <button type="button" class="chipbtn" id="simBtn">＋ Simulate customer</button>
+        </span>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div id="boardMsg" class="msg hidden"></div>
+      <div id="list"></div>
+      <div id="empty" class="empty hidden">
+        <strong>No orders here</strong>
+        New orders appear here.
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const STAFF_PAY = { unpaid: 'Unpaid', slip: 'Slip to check', paid: 'Paid ✓' };
+    const POLL_MS = 5000;
+    let pin = '';
+    let timer = null;
+    let orders = [];
+    let primed = false;            // โหลดครั้งแรกแล้วหรือยัง (ครั้งแรกไม่แจ้งเตือนออร์เดอร์เก่า)
+    const fresh = new Set();       // ออร์เดอร์ที่เพิ่งเข้ามาหลังเปิดหน้านี้ (แสดงป้าย NEW จนกว่าจะจ่ายแล้ว)
+    let soundOn = false;
+    try { soundOn = localStorage.getItem('staffSound') === '1'; } catch (_) {}
+
+    const isOpen = (o) => statusIndex(o.status) !== 3;   // ลูกค้ารับแล้วจะไม่แสดง
+    const keyOf = (o) => String(queueOf(o));
+
+    function logout(message) {
+      clearTimeout(timer);
+      pin = ''; orders = []; primed = false; fresh.clear();
+      try { sessionStorage.removeItem('staffPin'); } catch (_) {}
+      $('board').classList.add('hidden');
+      $('login').classList.remove('hidden');
+      $('logout').classList.add('hidden');
+      $('pin').value = '';
+      showMsg($('loginMsg'), message || '', 'err');
+    }
+
+    function renderSound() {
+      const b = $('soundBtn');
+      b.textContent = soundOn ? '🔔 Sound on' : '🔇 Sound off';
+      b.setAttribute('aria-pressed', String(soundOn));
+    }
+
+    function renderStats(rows) {
+      const paid = rows.filter((o) => payOf(o) === 'paid');
+      const count = (i) => paid.filter((o) => statusIndex(o.status) === i).length;
+      const slips = rows.filter((o) => payOf(o) === 'slip').length;
+      const box = $('stats');
+      box.replaceChildren();
+      [['Slips to check', slips, slips > 0], ['In queue', count(0)], ['Being made', count(1)], ['Ready', count(2)]]
+        .forEach(([label, n, alert]) => box.append(el('div', { class: 'stat' + (alert ? ' alert' : '') },
+          el('b', { text: String(n) }), el('span', { text: label }))));
+    }
+
+    function renderCard(o) {
+      const q = queueOf(o), pay = payOf(o), idx = statusIndex(o.status);
+      const lines = el('ul', { class: 'lines' });
+      fillItems(lines, o);
+      const isNew = fresh.has(keyOf(o)) && pay !== 'paid';
+      const card = el('div', { class: 'card order ' + (pay === 'paid' ? 's' + Math.max(idx, 0) : 'pend') + (isNew ? ' fresh' : '') },
+        el('div', { class: 'head' },
+          el('span', { class: 'q', text: String(q) }),
+          el('span', { class: 'tags' },
+            isNew ? el('span', { class: 'newtag', text: 'NEW' }) : '',
+            el('span', { class: 'chip ' + pay, text: STAFF_PAY[pay] }))),
+        el('div', { class: 'meta' },
+          el('span', { class: 'who', text: o.name ? 'K. ' + o.name : '' }),
+          priceOf(o) !== null ? el('span', { class: 'amt', text: baht(priceOf(o)) }) : ''),
+        lines);
+
+      if (pay === 'unpaid') {
+        card.append(el('p', { class: 'warn', text: 'Waiting for the customer to pay' }));
+      } else if (pay === 'slip') {
+        const btn = el('button', { class: 'btn cherry', type: 'button', text: 'Check slip' });
+        btn.addEventListener('click', () => openSlip(o));
+        card.append(btn);
+      } else {
+        const next = idx >= 0 && idx < STATUSES.length - 1 ? STATUSES[idx + 1] : null;
+        if (idx >= 0) card.append(el('span', { class: 'sc s' + idx, text: STATUSES[idx].label }));
+        if (next) {
+          const btn = el('button', { class: 'btn act' + (idx + 1), type: 'button', text: next.act });
+          btn.addEventListener('click', () => advance(q, next.key, btn));
+          card.append(el('div', {}, btn));
+        }
+      }
+      return card;
+    }
+
+    function render() {
+      const rows = orders.filter(isOpen);
+      renderStats(rows);
+      const list = $('list');
+      list.replaceChildren(...rows.map(renderCard));
+      $('empty').classList.toggle('hidden', rows.length > 0);
+    }
+
+    // ออร์เดอร์ใหม่หรือสลิปใหม่เข้ามา: แถบแจ้งเตือน + เสียง (ถ้าเปิดไว้)
+    function notifyNew(texts) {
+      if (!texts.length) return;
+      toast('🔔 ' + texts[texts.length - 1], () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+      if (soundOn) beep(2);
+    }
+
+    async function load(silent) {
+      clearTimeout(timer);
+      try {
+        const data = await api(ENDPOINTS.staffOrders(), { pin });
+        const next = Array.isArray(data) ? data : (data && data.orders) || [];
+        const before = new Map(orders.map((o) => [keyOf(o), payOf(o)]));
+        const alerts = [];
+        if (primed) {
+          next.forEach((o) => {
+            const k = keyOf(o);
+            if (!before.has(k)) { fresh.add(k); alerts.push('New order ' + k); }
+            else if (before.get(k) !== 'slip' && payOf(o) === 'slip') alerts.push('Slip from ' + k);
+          });
+        }
+        orders = next;
+        primed = true;
+        showMsg($('boardMsg'), '');
+        $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        render();
+        notifyNew(alerts);
+      } catch (err) {
+        if (err.status === 401 || err.status === 403) return logout('Wrong PIN. Please try again.');
+        showMsg($('boardMsg'), err.message);
+        if (!silent && !orders.length) throw err;
+      }
+      timer = setTimeout(() => load(true), POLL_MS);
+    }
+
+    async function advance(q, status, btn) {
+      btn.disabled = true;
+      try {
+        await api(ENDPOINTS.setStatus(q), { method: 'PATCH', body: { status }, pin });
+        const o = orders.find((x) => String(queueOf(x)) === String(q));
+        if (o) o.status = status;
+        render();
+        load(true);
+      } catch (err) {
+        if (err.status === 401 || err.status === 403) return logout('Wrong PIN. Please try again.');
+        btn.disabled = false;
+        showMsg($('boardMsg'), err.message);
+      }
+    }
+
+    // ดูสลิปแล้วยืนยัน หรือปฏิเสธ (ปฏิเสธ = ลูกค้าต้องแนบใหม่)
+    async function openSlip(o) {
+      const q = queueOf(o);
+      const img = el('img', { class: 'slip-img', alt: 'Payment slip for ' + q });
+      const msg = el('div', { class: 'msg hidden' });
+      const ok = el('button', { class: 'btn', type: 'button', text: 'Confirm payment' });
+      const no = el('button', { class: 'btn ghost', type: 'button', text: 'Reject slip' });
+      const close = modal(
+        el('h2', { text: q + ' · ' + (priceOf(o) !== null ? baht(priceOf(o)) : '') }),
+        el('p', { text: 'Check the amount, the PromptPay account and the time on the slip.' }),
+        img, msg, ok, no);
+      const setPayment = async (payment) => {
+        ok.disabled = no.disabled = true;
+        try {
+          await api(ENDPOINTS.setPayment(q), { method: 'PATCH', body: { payment }, pin });
+          close();
+          load(true);
+        } catch (err) {
+          if (err.status === 401 || err.status === 403) { close(); return logout('Wrong PIN. Please try again.'); }
+          ok.disabled = no.disabled = false;
+          showMsg(msg, err.message);
+        }
+      };
+      ok.addEventListener('click', () => setPayment('paid'));
+      no.addEventListener('click', () => setPayment('unpaid'));
+      try {
+        const r = await api(ENDPOINTS.staffSlip(q), { pin });
+        img.src = r.slip;
+      } catch (err) {
+        showMsg(msg, err.message);
+      }
+    }
+
+    // สร้างออร์เดอร์ทดสอบ เหมือนมีลูกค้าสั่งเข้ามา (ไว้โชว์ระบบ)
+    async function simulate() {
+      const pick = (a) => a[Math.floor(Math.random() * a.length)];
+      const items = [{ drink: pick(DEFAULT_MENU).name, temp: pick(['hot', 'iced']), quantity: 1 + Math.floor(Math.random() * 2) }];
+      $('simBtn').disabled = true;
+      try {
+        await api(ENDPOINTS.createOrder(), { method: 'POST', body: { name: pick(['Fon', 'Mew', 'Ploy', 'Nam', 'Beam', 'Ice']), items } });
+        await load(true);
+      } catch (err) {
+        showMsg($('boardMsg'), err.message);
+      } finally {
+        $('simBtn').disabled = false;
+      }
+    }
+
+    async function enter(p) {
+      pin = p;
+      try {
+        await load(false);
+        if (!pin) return; // ถูกออกจากระบบเพราะ PIN ผิด
+        try { sessionStorage.setItem('staffPin', p); } catch (_) {}
+        $('login').classList.add('hidden');
+        $('board').classList.remove('hidden');
+        $('logout').classList.remove('hidden');
+      } catch (err) {
+        logout(err.message);
+      }
+    }
+
+    $('login').addEventListener('submit', (e) => {
+      e.preventDefault();
+      showMsg($('loginMsg'), '');
+      const p = $('pin').value.trim();
+      if (p) enter(p);
+    });
+    $('logout').addEventListener('click', (e) => { e.preventDefault(); logout(''); });
+    $('soundBtn').addEventListener('click', () => {
+      soundOn = !soundOn;
+      try { localStorage.setItem('staffSound', soundOn ? '1' : '0'); } catch (_) {}
+      renderSound();
+      if (soundOn) beep(1);   // เสียงทดสอบ และเป็นการปลดล็อกเสียงของเบราว์เซอร์
+    });
+    $('simBtn').addEventListener('click', simulate);
+
+    renderSound();
+    (function init() {
+      let saved = '';
+      try { saved = sessionStorage.getItem('staffPin') || ''; } catch (_) {}
+      if (saved) enter(saved);
+    })();
+  </script>
+</body>
+</html>

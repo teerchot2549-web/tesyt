@@ -1,0 +1,33 @@
+diff -ruN c/app/frontend/html/queue.html d/app/frontend/html/queue.html
+--- c/app/frontend/html/queue.html	2026-11-14 12:01:52.095991382 +0000
++++ d/app/frontend/html/queue.html	2026-11-14 12:22:48.684435063 +0000
+@@ -60,6 +60,7 @@
+           </div>
+           <div class="slip-sent hidden" id="slipSent">
+             <img id="slipThumb" alt="Your attached slip" title="Tap to enlarge">
++            <button type="button" class="slip-close hidden" id="slipClose" aria-label="Close slip">✕ Close</button>
+             <div>
+               <p class="slip-ok">✓ Slip attached</p>
+               <p class="small" id="slipSub"></p>
+@@ -214,7 +215,11 @@
+         btns.forEach((b) => { b.disabled = false; });
+       }
+     }
+-    $('slipThumb').onclick = () => $('slipThumb').classList.toggle('big');
++    // ขยาย/ปิดรูปสลิป: ปุ่ม ✕ Close, แตะรูปอีกครั้ง หรือกด Esc
++    const slipBig = (on) => { $('slipThumb').classList.toggle('big', on); $('slipClose').classList.toggle('hidden', !on); };
++    $('slipThumb').onclick = () => slipBig(!$('slipThumb').classList.contains('big'));
++    $('slipClose').onclick = () => slipBig(false);
++    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') slipBig(false); });
+     $('attach').onclick = () => $('file').click();
+     $('file').onchange = () => {
+       const f = $('file').files[0];
+diff -ruN c/app/frontend/html/style.css d/app/frontend/html/style.css
+--- c/app/frontend/html/style.css	2026-11-14 12:01:52.097058919 +0000
++++ d/app/frontend/html/style.css	2026-11-14 12:22:52.325391910 +0000
+@@ -218,3 +218,5 @@
+ .slip-sent img.big{position:fixed;inset:5vh 5vw;width:90vw;height:90vh;object-fit:contain;z-index:50;background:#fff;box-shadow:0 0 0 100vmax rgba(0,0,0,.55);cursor:zoom-out}
+ .slip-sent p{margin:0}
+ .slip-ok{font-weight:700;color:var(--leaf)}
++.slip-close{position:fixed;top:14px;right:14px;z-index:60;padding:10px 18px;border:0;border-radius:999px;background:var(--cherry,#D7263D);color:#fff;font-weight:700;font-size:1rem;font-family:inherit;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.35)}
++.slip-close.hidden{display:none}
