@@ -12,6 +12,7 @@ const ENDPOINTS = {
   qr:          (q) => '/orders/' + encodeURIComponent(q) + '/qr',      // GET  -> รูป SVG ของ QR จ่ายเงิน (ใช้เป็น <img src>)
   slip:        (q) => '/orders/' + encodeURIComponent(q) + '/slip',    // POST {slip: "data:image/..."} ลูกค้าแนบสลิป
   staffSlip:   (q) => '/staff/orders/' + encodeURIComponent(q) + '/slip', // GET -> {slip} (header X-Staff-PIN)
+  callAgain:   (q) => '/orders/' + encodeURIComponent(q) + '/call',    // POST (header X-Staff-PIN) เรียกลูกค้าซ้ำ -> {calls}
   setPayment:  (q) => '/orders/' + encodeURIComponent(q) + '/payment', // PATCH {payment:"paid"|"unpaid"} (header X-Staff-PIN)
 };
 

@@ -218,3 +218,12 @@ form#orderForm .stick{margin-top:2px}
 .slip-sent img.big{position:fixed;inset:5vh 5vw;width:90vw;height:90vh;object-fit:contain;z-index:50;background:#fff;box-shadow:0 0 0 100vmax rgba(0,0,0,.55);cursor:zoom-out}
 .slip-sent p{margin:0}
 .slip-ok{font-weight:700;color:var(--leaf)}
+<<<<<<< HEAD:tesyt/coffee-queue/app/frontend/html/style.css
+=======
+.slip-close{position:fixed;top:14px;right:14px;z-index:60;padding:10px 18px;border:0;border-radius:999px;background:var(--cherry,#D7263D);color:#fff;font-weight:700;font-size:1rem;font-family:inherit;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.35)}
+.slip-close.hidden{display:none}
+/* เรียกซ้ำ */
+.btn-row{display:flex;gap:10px}
+.btn-row .btn{flex:1}
+.called{display:inline-block;margin:0 0 12px 8px;padding:4px 12px;border-radius:999px;background:#FFF1D6;color:var(--wait);font-size:.85rem;font-weight:600}
+>>>>>>> da43e52 (ระบุสิ่งที่แก้ไป):coffee-queue/app/frontend/html/style.css

@@ -15,17 +15,28 @@ services:
       PGPASSWORD: coffee123
       PGDATABASE: coffee
       STAFF_PIN: "1234"
+      PROMPTPAY_ID: "${PROMPTPAY_ID:-}"   # ตั้งในไฟล์ .env หรือ export ก่อนรัน (ว่าง = QR เดโม)
     depends_on:
       - db
 
   db:                       # Container 3: PostgreSQL
     image: postgres:16
+    ports:
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_USER: coffee
       POSTGRES_PASSWORD: coffee123
       POSTGRES_DB: coffee
     volumes:
       - dbdata:/var/lib/postgresql/data   # ข้อมูลไม่หายเมื่อลบ container
+
+
+  adminer:                      # <-- เพิ่มตรงนี้
+      image: adminer
+      ports:
+        - "127.0.0.1:8081:8080"
+      depends_on:
+        - db
 
 volumes:
   dbdata:

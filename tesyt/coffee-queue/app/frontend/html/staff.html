@@ -118,10 +118,17 @@
       } else {
         const next = idx >= 0 && idx < STATUSES.length - 1 ? STATUSES[idx + 1] : null;
         if (idx >= 0) card.append(el('span', { class: 'sc s' + idx, text: STATUSES[idx].label }));
+        if (idx === 2 && o.calls > 0) card.append(el('span', { class: 'called', text: 'Called ' + o.calls + '×' }));
         if (next) {
           const btn = el('button', { class: 'btn act' + (idx + 1), type: 'button', text: next.act });
           btn.addEventListener('click', () => advance(q, next.key, btn));
-          card.append(el('div', {}, btn));
+          if (idx === 2) {
+            const call = el('button', { class: 'btn ghost', type: 'button', text: '📣 Call again' });
+            call.addEventListener('click', () => callAgain(q, call));
+            card.append(el('div', { class: 'btn-row' }, call, btn));
+          } else {
+            card.append(el('div', {}, btn));
+          }
         }
       }
       return card;
@@ -178,6 +185,21 @@
         if (o) o.status = status;
         render();
         load(true);
+      } catch (err) {
+        if (err.status === 401 || err.status === 403) return logout('Wrong PIN. Please try again.');
+        btn.disabled = false;
+        showMsg($('boardMsg'), err.message);
+      }
+    }
+
+    // เรียกลูกค้าซ้ำ: เพิ่มจำนวนครั้ง แล้วมือถือลูกค้าจะเด้งเตือนอีกรอบ
+    async function callAgain(q, btn) {
+      btn.disabled = true;
+      try {
+        const r = await api(ENDPOINTS.callAgain(q), { method: 'POST', body: {}, pin });
+        const o = orders.find((x) => String(queueOf(x)) === String(q));
+        if (o) o.calls = r.calls;
+        render();
       } catch (err) {
         if (err.status === 401 || err.status === 403) return logout('Wrong PIN. Please try again.');
         btn.disabled = false;

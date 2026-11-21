@@ -5,15 +5,22 @@ const express = require('express');
 const os = require('os');
 const { Pool } = require('pg');
 const QRCode = require('qrcode');
+const generatePayload = require('promptpay-qr');
 
 const app = express();
 const db = new Pool();
 const PIN = process.env.STAFF_PIN || '1234';
 const STATUSES = ['waiting', 'making', 'ready', 'done'];   // รอคิว -> กำลังทำ -> พร้อมรับ -> รับแล้ว
 const MAX_QTY = 20;
+// PromptPay ID ของร้าน: เบอร์โทร (0812345678) หรือเลขบัตรประชาชน 13 หลัก
+// ถ้าไม่ตั้ง PROMPTPAY_ID จะยังใช้ QR เดโมเหมือนเดิม (สแกนจ่ายเงินไม่ได้)
+const PROMPTPAY_ID = (process.env.PROMPTPAY_ID || '').trim();
 const MAX_SLIP = 2500000;   // ขนาดสลิป (ตัวอักษร base64) สูงสุด ประมาณ 1.8 MB
 
 app.use(express.json({ limit: '3mb' }));   // สลิปแนบมาเป็นรูป base64 จึงต้องรับ body ใหญ่กว่าปกติ
+// รันโดยไม่ใช้ Docker/nginx: ตั้ง STATIC_DIR ให้ชี้โฟลเดอร์หน้าเว็บ แล้วเปิดที่ http://localhost:3000
+// (ถ้าไม่ตั้ง ไม่มีผลอะไร ใน Docker หน้าเว็บยังเสิร์ฟโดย nginx เหมือนเดิม)
+if (process.env.STATIC_DIR) app.use(express.static(process.env.STATIC_DIR));
 
 // ใส่ชื่อ pod/container ไว้ใน header ทุก response เพื่อดูว่า Load Balance กระจายจริง
 app.use((req, res, next) => { res.set('X-Served-By', os.hostname()); next(); });
@@ -29,7 +36,7 @@ const idOf = (q) => {                                                  // "A015"
 async function loadOrders(whereSql, params) {
   const { rows } = await db.query(
     `SELECT o.id, o.customer_name, o.status, o.created_at,
-            o.payment_status, (o.slip IS NOT NULL) AS has_slip,
+            o.payment_status, (o.slip IS NOT NULL) AS has_slip, o.call_count,
             i.temp, i.quantity, m.name AS drink, m.price
        FROM orders o
        JOIN order_items i ON i.order_id = o.id
@@ -40,7 +47,7 @@ async function loadOrders(whereSql, params) {
   for (const r of rows) {
     if (!map.has(r.id)) {
       map.set(r.id, { id: r.id, queue: queueNo(r.id), name: r.customer_name,
-                      status: r.status, payment: r.payment_status, hasSlip: r.has_slip,
+                      status: r.status, payment: r.payment_status, hasSlip: r.has_slip, calls: r.call_count,
                       created_at: r.created_at, items: [], total: 0 });
     }
     const o = map.get(r.id);
@@ -105,6 +112,7 @@ app.post('/api/orders', async (req, res) => {
     client.release();
   }
   const [order] = await loadOrders('WHERE o.id = $1', [orderId]);
+  console.log('ออเดอร์ใหม่', order.queue, order.name, '฿' + order.total);
   res.status(201).json(order);
 });
 
@@ -116,12 +124,19 @@ app.get('/api/orders/:q', async (req, res) => {
   res.json(order);
 });
 
-// QR สำหรับจ่ายเงิน (ตัวอย่าง: ข้อความทดสอบ ไม่ใช่บัญชีจริง) ได้เป็นรูป SVG ใช้กับ <img src> ได้เลย
+// บอกหน้าเว็บว่า QR เป็นของจริงหรือเดโม (ไม่ส่งเลข PromptPay ออกไป)
+app.get('/api/config', (req, res) => res.json({ promptpay: !!PROMPTPAY_ID }));
+
+// QR สำหรับจ่ายเงิน ได้เป็นรูป SVG ใช้กับ <img src> ได้เลย
+// ตั้ง PROMPTPAY_ID แล้ว = QR PromptPay จริงพร้อมยอดเงินของออร์เดอร์ (ยอดคำนวณจากราคาใน DB)
 app.get('/api/orders/:q/qr', async (req, res) => {
   const id = idOf(req.params.q);
   const [order] = id ? await loadOrders('WHERE o.id = $1', [id]) : [];
   if (!order) return res.status(404).json({ error: 'Queue number not found' });
-  const svg = await QRCode.toString(`DEMO-PROMPTPAY|${order.queue}|${order.total}.00`,
+  const text = PROMPTPAY_ID
+    ? generatePayload(PROMPTPAY_ID, { amount: order.total })
+    : `DEMO-PROMPTPAY|${order.queue}|${order.total}.00`;
+  const svg = await QRCode.toString(text,
     { type: 'svg', margin: 1, color: { dark: '#123D2F', light: '#FFFFFF' } });
   res.type('image/svg+xml').set('Cache-Control', 'no-store').send(svg);
 });
@@ -189,6 +204,18 @@ app.patch('/api/orders/:q/status', staffOnly, async (req, res) => {
   res.json({ ok: true, queue: queueNo(id), status });
 });
 
+// เรียกลูกค้าซ้ำ (ตอนสถานะ ready): นับจำนวนครั้ง หน้าลูกค้าเห็นตัวเลขเพิ่มแล้วจะเด้งเตือนอีกรอบ
+app.post('/api/orders/:q/call', staffOnly, async (req, res) => {
+  const id = idOf(req.params.q);
+  const r = await db.query("UPDATE orders SET call_count = call_count + 1 WHERE id = $1 AND status = 'ready' RETURNING call_count", [id]);
+  if (!r.rowCount) {
+    const e = await db.query('SELECT 1 FROM orders WHERE id = $1', [id]);
+    return e.rowCount ? res.status(409).json({ error: 'The drink is not ready yet.' })
+                      : res.status(404).json({ error: 'Queue number not found' });
+  }
+  res.json({ ok: true, queue: queueNo(id), calls: r.rows[0].call_count });
+});
+
 // error ที่ไม่ได้คาดไว้ เช่น DB หลุดกลางคัน
 app.use((err, req, res, next) => {
   console.error(err);
@@ -206,6 +233,7 @@ async function initDb() {
   // ฐานข้อมูลเดิมที่ยังไม่มีคอลัมน์: เติมให้ (แถวเก่าเป็น paid) แล้วออร์เดอร์ใหม่ค่อยเริ่มที่ unpaid
   await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'paid'`);
   await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS slip TEXT`);
+  await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS call_count INT NOT NULL DEFAULT 0`);
   await db.query(`ALTER TABLE orders ALTER COLUMN payment_status SET DEFAULT 'unpaid'`);
   await db.query(`CREATE TABLE IF NOT EXISTS order_items (
     id SERIAL PRIMARY KEY,
